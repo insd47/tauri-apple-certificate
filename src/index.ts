@@ -48,7 +48,7 @@ async function run(): Promise<void> {
     await exec(`security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '${keychainPassword}' '${keychainName}'`);
 
     // Find identities and filter by prefix
-    const { stdout, stderr } = await exec(`security find-identity -vp codesigning '${keychainName}' | cat`);
+    const { stdout } = await exec(`-codesigning '${keychainName}' | cat`);
 
     const lines = stdout
       .split('\n')
@@ -62,7 +62,6 @@ async function run(): Promise<void> {
     if (!match) {
       core.warning('No matching identity found. Printing all identities for debugging.');
       core.info(stdout);
-      core.info(stderr);
       throw new Error(`No identity found with prefix: ${identityPrefix}`);
     }
 
