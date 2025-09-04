@@ -8,6 +8,10 @@ import { join } from 'node:path';
 
 const exec = promisify(rawExec);
 
+function sh(str: string): string {
+  return str.replace(/'/g, "'\\''");
+}
+
 async function run(): Promise<void> {
   try {
     // Inputs
@@ -53,7 +57,7 @@ async function run(): Promise<void> {
     await exec(`security set-keychain-settings -t 3600 -u '${keychainPath}'`);
 
     // Import certificate (with private key) into the explicit keychain
-    await exec(`security import '${certPath}' -k '${keychainPath}' -P '${appleCertPassword}' -T /usr/bin/codesign`);
+    await exec(`security import '${certPath}' -k '${keychainPath}' -P '${appleCertPassword}' -f pkcs12 -A -T /usr/bin/codesign`);
 
     // Allow codesign to access the key
     await exec(`security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '${keychainPassword}' '${keychainPath}'`);
@@ -73,9 +77,51 @@ async function run(): Promise<void> {
     });
 
     if (!match) {
-      core.warning('No matching identity found. Printing all identities for debugging.');
-      core.info(stdout);
-      throw new Error(`No identity found with prefix: ${identityPrefix}`);
+      core.warning('No matching valid identity found. Attempting to force trust the imported certificate...');
+
+      // Try to export the leaf certificate (PEM) from our keychain by prefix
+      const cerPath = join(workDir, 'leaf.cer');
+      try {
+        const { stdout: certPem } = await exec(`security find-certificate -c '${sh(identityPrefix)}' -p '${keychainPath}' | cat`);
+        if (certPem && certPem.includes('BEGIN CERTIFICATE')) {
+          writeFileSync(cerPath, certPem);
+          // Add as trusted (as root) in our temp keychain to satisfy trust evaluation
+          await exec(`security add-trusted-cert -k '${keychainPath}' -r trustAsRoot '${cerPath}'`);
+        } else {
+          core.warning('Could not extract certificate PEM by prefix; skipping trust override.');
+        }
+      } catch (e) {
+        core.warning(`Failed to export and trust certificate: ${(e as Error).message}`);
+      }
+
+      // Retry identity lookup after trust adjustment
+      const { stdout: retryOut } = await exec(`security find-identity -v -p codesigning '${keychainPath}' | cat`);
+      const retryLines = retryOut
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const retryMatch = retryLines.find((l) => {
+        const m = l.match(/\"([^\"]+)\"/);
+        const name = m?.[1] ?? '';
+        return name.startsWith(identityPrefix);
+      });
+
+      if (!retryMatch) {
+        core.warning('No matching identity found after trust override. Printing all identities for debugging.');
+        core.info(retryOut || stdout);
+        throw new Error(`No identity found with prefix: ${identityPrefix}`);
+      }
+
+      // Use the retried match
+      const quotedRetry = retryMatch.match(/"([^"]+)"/);
+      const certIdRetry = quotedRetry?.[1] ?? '';
+      if (!certIdRetry) {
+        throw new Error('Failed to parse certificate identity after trust override');
+      }
+      core.setOutput('cert-id', certIdRetry);
+      core.setOutput('cert-info', retryMatch);
+      core.info('Certificate imported, trust overridden, and keychain configured.');
+      return;
     }
 
     // Extract quoted identity: 1) <hash> "Identity Name"
