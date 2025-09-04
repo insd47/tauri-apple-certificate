@@ -21,7 +21,7 @@ A GitHub Action to import an Apple .p12 certificate into a temporary macOS keych
 ## Example usage
 ```yaml
 - name: Prepare Apple Certificate
-  uses: owner/tauri-apple-certificate@v1
+  uses: insd47/tauri-apple-certificate@v1
   with:
     apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
     apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
