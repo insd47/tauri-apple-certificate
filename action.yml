@@ -1,0 +1,23 @@
+name: 'Prepare Tauri Apple Certificate'
+description: 'An action to prepare Apple certificates for Tauri apps'
+inputs:
+  apple-certificate:
+    description: 'The Apple certificate in base64 format'
+    required: true
+  apple-certificate-password:
+    description: 'The password for the Apple certificate'
+    required: true
+  identity-prefix:
+    description: 'Prefix of the certificate identity to filter (e.g., Apple Development, Apple Distribution)'
+    required: false
+    default: 'Apple Development'
+outputs:
+  cert-info:
+    description: 'Information about the installed certificate'
+  cert-id:
+    description: 'The certificate identity (quoted name) matched by the prefix filter'
+runs:
+  using: 'node22'
+  main: 'dist/index.js'
+  post: 'dist/post/index.js'
+  post-if: 'always()'

@@ -1,0 +1,22 @@
+{
+  "name": "tauri-apple-certificate",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+  "build": "tsc && ncc build src/index.ts -o dist --minify && ncc build src/post/index.ts -o dist/post --minify"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.4.1",
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@vercel/ncc": "^0.38.3",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  }
+}
