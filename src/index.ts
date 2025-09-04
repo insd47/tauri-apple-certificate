@@ -3,7 +3,7 @@ import { exec as rawExec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const exec = promisify(rawExec);
@@ -25,40 +25,53 @@ async function run(): Promise<void> {
     // Create temp working dir and write certificate to file
     const workDir = mkdtempSync(join(tmpdir(), 'tauri-apple-cert-'));
     const certPath = join(workDir, 'certificate.p12');
-    const keychainName = 'build.keychain';
+
+    // Use an absolute keychain path (.keychain-db on modern macOS)
+    const home = process.env.HOME ?? homedir();
+    const loginKeychain = join(home, 'Library', 'Keychains', 'login.keychain-db');
+    const keychainName = `tauri-build-${Date.now()}.keychain-db`;
+    const keychainPath = join(home, 'Library', 'Keychains', keychainName);
 
     // Persist state for post cleanup
-    core.saveState('keychainName', keychainName);
+    core.saveState('keychainPath', keychainPath);
     core.saveState('keychainPassword', keychainPassword);
 
     // Write certificate file
     const certBuffer = Buffer.from(appleCertBase64, 'base64');
     writeFileSync(certPath, certBuffer);
 
-    // Keychain operations
-    await exec(`security create-keychain -p '${keychainPassword}' '${keychainName}'`);
-    await exec(`security default-keychain -s '${keychainName}'`);
-    await exec(`security unlock-keychain -p '${keychainPassword}' '${keychainName}'`);
-    await exec(`security set-keychain-settings -t 3600 -u '${keychainName}'`);
+    // Capture current keychain search list (for restore in post)
+    const { stdout: prevList } = await exec(`security list-keychains -d user`);
+    core.saveState('prevKeychains', prevList);
 
-    // Import certificate
-    await exec(`security import '${certPath}' -k '${keychainName}' -P '${appleCertPassword}' -T /usr/bin/codesign`);
+    // Keychain operations
+    await exec(`security create-keychain -p '${keychainPassword}' '${keychainPath}'`);
+    // Add our keychain alongside the login keychain to preserve trust chain resolution
+    await exec(`security list-keychains -d user -s '${loginKeychain}' '${keychainPath}'`);
+    // Keep default keychain as login; just unlock and use our keychain explicitly
+    await exec(`security unlock-keychain -p '${keychainPassword}' '${keychainPath}'`);
+    await exec(`security set-keychain-settings -t 3600 -u '${keychainPath}'`);
+
+    // Import certificate (with private key) into the explicit keychain
+    await exec(`security import '${certPath}' -k '${keychainPath}' -P '${appleCertPassword}' -T /usr/bin/codesign`);
 
     // Allow codesign to access the key
-    await exec(`security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '${keychainPassword}' '${keychainName}'`);
+    await exec(`security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '${keychainPassword}' '${keychainPath}'`);
 
-    // Find identities and filter by prefix
-    const { stdout } = await exec(`-codesigning '${keychainName}' | cat`);
+    // Find identities in our keychain and filter by prefix
+    const { stdout } = await exec(`security find-identity -v -p codesigning '${keychainPath}' | cat`);
 
     const lines = stdout
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
+
     const match = lines.find((l) => {
       const m = l.match(/\"([^\"]+)\"/);
       const name = m?.[1] ?? '';
       return name.startsWith(identityPrefix);
     });
+
     if (!match) {
       core.warning('No matching identity found. Printing all identities for debugging.');
       core.info(stdout);
